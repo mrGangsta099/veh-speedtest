@@ -19,6 +19,7 @@ local SpeedTest = {
     saveChronos = {},
     lastSpeed = 0,
     updateThread = nil,
+    controlThread = nil,
     updateHUDThread = nil
 }
 
@@ -46,8 +47,7 @@ local function showNotification(message, type)
 end
 
 local function playSound(soundName)
-    if not Config.sounds then return end
-    PlaySoundFrontend(-1, soundName, "HUD_FRONTEND_DEFAULT_SOUNDSET", 1)
+    if Config.sounds then PlaySoundFrontend(-1, soundName, "HUD_FRONTEND_DEFAULT_SOUNDSET", 1) end
 end
 
 -- Modern and compact user interface
@@ -58,7 +58,7 @@ local function drawModernHUD()
     local size = Config.hudSize
 
     -- Main background, very subtle
-    DrawRect(pos.x, pos.y, size.width, size.height, 0, 0, 0, 70)
+    DrawRect(pos.x, pos.y, size.width, size.height, 0, 0, 0, 120)
 
     -- Thin progress bar at the bottom
     local progress = math.min(SpeedTest.lastSpeed / SpeedTest.targetSpeed, 1.0)
@@ -189,12 +189,29 @@ local function startUpdateThread()
                 SpeedTest:onSpeedReached(currentSpeed, elapsedTime)
                 break
             end
-
-            -- Draw the interface
-            drawModernHUD()
         end
 
         SpeedTest.updateThread = nil
+    end)
+end
+
+-- Control thread
+local function startControlThread()
+    if SpeedTest.controlThread then return end
+
+    local notControlPressed = true
+    SpeedTest.controlThread = CreateThread(function()
+        while SpeedTest.isActive and notControlPressed do
+            Wait(0)
+
+            -- Check if the button accelerate has been pressed
+            if IsControlJustPressed(0, 71) then
+                notControlPressed = true
+                startUpdateThread()
+            end
+        end
+
+        SpeedTest.controlThread = nil
     end)
 end
 
@@ -221,8 +238,8 @@ function SpeedTest:start(speedLimit)
     showNotification(string.format("🚀 Timer started - Target: %d %s", validSpeed, Config.speedUnit), "info")
     playSound("RACE_COUNTDOWN_GENERAL")
 
-    -- Start update thread
-    startUpdateThread()
+    -- Start control thread
+    startControlThread()
 
     print(string.format("[SpeedTest] Timer started - Target: %d %s", validSpeed, Config.speedUnit))
 end
@@ -246,8 +263,9 @@ function SpeedTest:onSpeedReached(finalSpeed, totalTime)
     local model = GetEntityModel(self.vehicle)
     local vehName = GetDisplayNameFromVehicleModel(model)
     local manufacturer = GetMakeNameFromVehicleModel(model)
-    local vehLabel = GetLabelText(vehName) ~= "NULL" and GetLabelText(vehName) or vehName
-    local vehInfo = string.format("%s %s", manufacturer, vehLabel)
+    local label = GetLabelText(vehName)
+    label = label ~= "NULL" and label or vehName
+    local vehInfo = string.format("%s %s", manufacturer, label)
 
     local timeString = formatTime(totalTime)
     saveChrono(model, self.targetSpeed, timeString, totalTime, vehInfo)
@@ -276,7 +294,7 @@ function SpeedTest:getChronos()
     end
 end
 
--- Network events
+-- Commands
 RegisterCommand("startrun", function(raw, args, command)
     if args[1] == nil then
         showNotification(string.format("❌ You must enter a speed (/startrun <speed_in_%s>).", Config.speedUnit), "error")
@@ -294,7 +312,7 @@ RegisterCommand("showchrono", function()
     SpeedTest:getChronos()
 end, false)
 
--- HUD display thread (separated for optimization)
+-- HUD display thread
 AddEventHandler("startHUDThread", function()
     if SpeedTest.updateHUDThread then return end
 
@@ -303,6 +321,8 @@ AddEventHandler("startHUDThread", function()
             Wait(0)
             drawModernHUD()
         end
+
+        SpeedTest.updateHUDThread = nil
     end)
 end)
 
